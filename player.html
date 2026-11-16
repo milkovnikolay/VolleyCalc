@@ -227,7 +227,7 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
   </nav>
   <button type="button" id="setBtn" aria-label="Настройки" title="Настройки">⚙</button>
   <button type="button" class="primary" id="addPack">+ Матч</button>
-  <input type="file" id="packInput" accept=".json,.zip,application/json,application/zip,application/octet-stream,text/plain" multiple hidden>
+  <input type="file" id="packInput" accept=".json,.zip,.mp4,.webm,.mov,.m4v,application/json,application/zip,application/octet-stream,text/plain,video/*" multiple hidden>
 </div></header>
 
 <main>
@@ -393,6 +393,7 @@ async function unzipJson(f) {
     const method = dv.getUint16(i + 8, true), size = dv.getUint32(i + 18, true), nl = dv.getUint16(i + 26, true), xl = dv.getUint16(i + 28, true);
     const name = dec.decode(b.subarray(i + 30, i + 30 + nl)), st = i + 30 + nl + xl;
     if (method === 0 && /\.json$/i.test(name)) out.push(new File([b.subarray(st, st + size)], name.split("/").pop(), { type: "application/json" }));
+    else if (method === 0 && /\.(mp4|webm|mov|m4v)$/i.test(name)) out.push(new File([b.subarray(st, st + size)], name.split("/").pop(), { type: /\.webm$/i.test(name) ? "video/webm" : "video/mp4" }));
     else if (method === 8 && /\.json$/i.test(name) && typeof DecompressionStream !== "undefined") {
       const ds = new Blob([b.subarray(st, st + size)]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
       out.push(new File([await new Response(ds).blob()], name.split("/").pop(), { type: "application/json" }));
@@ -404,7 +405,7 @@ async function unzipJson(f) {
 async function addPacks(files) {
   let n = 0, bad = 0;
   const flat = []; for (const f of files) { if (/\.zip$/i.test(f.name) || f.type === "application/zip") { try { flat.push(...await unzipJson(f)); } catch (e) { bad++; } } else flat.push(f); }
-  files = flat;
+  const vids = flat.filter(isVid); files = flat.filter((f) => !isVid(f));
   const put = (p) => { store.packs[p.match.id + "|" + p.player.num] = p; player = p.player.num; curKey = p.match.id + "|" + p.player.num; n++; };
   for (const f of files) {
     try { const d = JSON.parse(await f.text());
@@ -412,10 +413,60 @@ async function addPacks(files) {
       else if (d.app === "vc-player-season" && Array.isArray(d.packs)) d.packs.forEach((p) => { if (p && p.app === "vc-player-pack") put(p); });
       else bad++; } catch (e) { bad++; }
   }
-  persist(); renderAll();
-  if (bad) note("Не удалось прочитать " + plural(bad, "файл", "файла", "файлов") + ": это не пакет VolleyCalc Игрок.");
-  else if (n) note("Добавлено матчей: " + n);
+  persist();
+  // нарезки: сами находят свой матч — по имени файла, которое записано в пакете, или по длительности
+  const got = [], lost = [];
+  for (const f of vids) { const d = await probe(f), k = findReelKey(f, d);
+    if (k) { await attachReel(k, f, d, true); got.push(k); } else lost.push(f.name); }
+  if (got.length && !n) { const k = got[got.length - 1]; player = store.packs[k].player.num; curKey = k; }
+  renderAll();
+  const msg = [];
+  if (n) msg.push("Добавлено матчей: " + n);
+  if (got.length) msg.push((got.length === 1 ? "Нарезка добавлена к матчу «" + title(store.packs[got[0]]) + "»" : "Нарезки добавлены к матчам: " + got.length) + (SIM ? "" : " и сохранена в приложении — открывать файл снова не нужно"));
+  if (lost.length) msg.push("Видео " + lost.join(", ") + " не подошло ни к одному матчу: сначала добавьте файл матча от тренера (.json), потом нарезку");
+  if (bad) msg.push("Не удалось прочитать " + plural(bad, "файл", "файла", "файлов") + ": это не пакет VolleyCalc Игрок");
+  if (msg.length) note(msg.join(". ") + ".");
 }
+const isVid = (f) => /^video\//.test(f.type) || /\.(mp4|webm|mov|m4v)$/i.test(f.name);
+/* ---- нарезки хранятся в приложении (IndexedDB), чтобы не выбирать файл каждый раз ---- */
+const RDB = (() => { let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => { const r = indexedDB.open("vc-player", 1); r.onupgradeneeded = () => r.result.createObjectStore("reels"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+  const tx = async (mode, fn) => { const db = await open(); return new Promise((res, rej) => { const t = db.transaction("reels", mode); const r = fn(t.objectStore("reels")); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); }); };
+  return { get: (k) => tx("readonly", (st) => st.get(k)), put: (k, v) => tx("readwrite", (st) => st.put(v, k)), del: (k) => tx("readwrite", (st) => st.delete(k)), keys: () => tx("readonly", (st) => st.getAllKeys()) };
+})();
+const reelKeys = new Set();
+if (!SIM && window.indexedDB) RDB.keys().then((ks) => { (ks || []).forEach((k) => reelKeys.add(k)); if (curKey && reelKeys.has(curKey)) autoReel(); if (tab === "season") renderSeason(); }).catch(() => {});
+/* Какому матчу принадлежит файл нарезки: точное имя из пакета, иначе единственный матч с такой длиной нарезки (±1,5 с). */
+function findReelKey(f, dur) {
+  const L = Object.entries(store.packs).filter(([, p]) => p.reel), mine = (k) => store.packs[k].player.num === player ? 0 : 1;
+  const byName = L.filter(([, p]) => p.reel.name === f.name).map(([k]) => k).sort((a, b) => mine(a) - mine(b));
+  if (byName.length) return byName[0];
+  const byDur = dur ? L.filter(([, p]) => p.reel.dur && Math.abs(p.reel.dur - dur) < 1.5).map(([k]) => k) : [];
+  return byDur.length === 1 ? byDur[0] : null;
+}
+async function attachReel(key, f, dur, quiet) {
+  const p = store.packs[key]; if (!p || !p.reel) return false;
+  dur = isFinite(dur) && dur > 0 ? dur : p.reel.dur;
+  if (!SIM && window.indexedDB) {
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      await RDB.put(key, { blob: f, name: f.name, dur, saved: Date.now() }); reelKeys.add(key); }
+    catch (e) { if (!quiet) note("Нарезку не удалось сохранить в приложении (мало места на устройстве?) — её придётся открывать файлом."); }
+  }
+  if (key === curKey) { if (reelV) URL.revokeObjectURL(reelV.url); reelV = { url: URL.createObjectURL(f), name: f.name, dur }; vidFor = curKey; if (!quiet || !vmode) useMode("reel"); }
+  return true;
+}
+/* Открыть сохранённую нарезку матча автоматически. */
+async function autoReel() {
+  const key = curKey, p = store.packs[key]; if (!p || !p.reel || reelV || SIM || !reelKeys.has(key)) return;
+  let r = null; try { r = await RDB.get(key); } catch (e) {}
+  if (key !== curKey || reelV) return;
+  if (!r || !r.blob) { reelKeys.delete(key); return; }
+  if (r.dur && p.reel.dur && Math.abs(r.dur - p.reel.dur) > 3) {   // тренер переделал нарезку — старый файл не подходит к новой разметке
+    RDB.del(key).catch(() => {}); reelKeys.delete(key); note("Тренер обновил нарезку этого матча — добавьте новый файл нарезки («+ Матч»)."); return; }
+  reelV = { url: URL.createObjectURL(r.blob), name: r.name, dur: r.dur || p.reel.dur }; vidFor = key;
+  if (!vmode) useMode("reel"); else renderSrc();
+}
+function dropReel(k) { if (reelKeys.has(k)) { reelKeys.delete(k); RDB.del(k).catch(() => {}); } }
 async function pickOpen(inputId, id, types, multiple) {
   if (typeof window.showOpenFilePicker === "function") {
     try { const hs = await window.showOpenFilePicker({ id, multiple: multiple !== false, startIn: "documents", types }); return Promise.all(hs.map((h) => h.getFile())); }
@@ -423,11 +474,11 @@ async function pickOpen(inputId, id, types, multiple) {
   }
   const inp = $(inputId); inp.multiple = multiple !== false; inp.click(); return null;
 }
-$("addPack").onclick = async () => { const fs = await pickOpen("packInput", "vc-player-packs", [{ description: "Пакет матча, файл сезона или архив", accept: { "application/json": [".json"], "application/zip": [".zip"] } }]); if (fs && fs.length) addPacks(fs); };
+$("addPack").onclick = async () => { const fs = await pickOpen("packInput", "vc-player-packs", [{ description: "Пакет матча, файл сезона, архив или нарезка", accept: { "application/json": [".json"], "application/zip": [".zip"], "video/*": [".mp4", ".webm", ".mov", ".m4v"] } }]); if (fs && fs.length) addPacks(fs); };
 $("packInput").onchange = (e) => { addPacks(Array.from(e.target.files || [])); e.target.value = ""; };
 document.body.addEventListener("dragover", (e) => e.preventDefault());
 document.body.addEventListener("drop", (e) => { const fs = Array.from(e.dataTransfer.files || []); if (!fs.length) return; e.preventDefault();
-  if (fs.every((f) => /\.(json|zip)$/i.test(f.name))) addPacks(fs); else if (curKey) openVideoFiles(fs); });
+  if (fs.every((f) => /\.(json|zip)$/i.test(f.name) || (isVid(f) && fs.length === 1 && findReelKey(f, 0)))) addPacks(fs); else if (curKey) openVideoFiles(fs); else addPacks(fs); });
 function download(name, blob) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
 $("saveAll").onclick = () => {
   const list = player ? packsOf(player).map(([, p]) => p) : []; if (!list.length) { note("Пока нечего сохранять."); return; }
@@ -547,7 +598,7 @@ function renderMatch() {
   list.forEach(([k, p]) => { const o = el("option", null, title(p)); o.value = k; if (k === curKey) o.selected = true; ms.appendChild(o); });
   const p = store.packs[curKey];
   const ss = $("setSel"); ss.textContent = ""; [["all", "весь матч"]].concat(setsPlayed(p).map((s) => [String(s), "партия " + s])).forEach(([v, t]) => { const o = el("option", null, t); o.value = v; if (v === setF) o.selected = true; ss.appendChild(o); });
-  syncVideoFor(p); renderSrc(); renderClip();
+  syncVideoFor(p); renderSrc(); renderClip(); autoReel();
   const s = calc(p, setF);
   const hw = Array.from(new Set(p.acts.filter((a) => a.hw).map((a) => a.ri)));
   if (hw.length) { const f = fbOf(curKey), sn = hw.filter((ri) => f.seen[ri]).length;
@@ -776,7 +827,7 @@ function gamesCard(list) {
   if (ask) {
     const ids = ask.filter((k) => store.packs[k]); const n = el("div", "notice", ids.length === 1 ? "Удалить из приложения матч «" + title(store.packs[ids[0]]) + "»?" : "Удалить из приложения матчей: " + ids.length + "?");
     const r = el("div", "row"); r.style.marginTop = "8px";
-    r.append(btn("Удалить", () => { ids.forEach((k) => { delete store.packs[k]; if (k === curKey) { curKey = null; pl = null; } if (k === vidFor) syncVideoFor(null); }); ask = null; persist(); renderAll(); }, "danger"), btn("Отмена", () => { ask = null; renderSeason(); }));
+    r.append(btn("Удалить", () => { ids.forEach((k) => { delete store.packs[k]; dropReel(k); if (k === curKey) { curKey = null; pl = null; } if (k === vidFor) syncVideoFor(null); }); ask = null; persist(); renderAll(); }, "danger"), btn("Отмена", () => { ask = null; renderSeason(); }));
     n.appendChild(r); c.appendChild(n); setTimeout(() => c.scrollIntoView({ block: "center", behavior: "smooth" }), 0);
   }
   const w = el("div", "tw"), t = el("table", "st games"), h = el("tr"), all = el("input"); all.type = "checkbox"; all.setAttribute("aria-label", "Отметить все");
@@ -786,7 +837,7 @@ function gamesCard(list) {
     const td0 = el("td"); td0.appendChild(cb); tr.appendChild(td0);
     const td1 = el("td"); td1.appendChild(el("b", null, title(p))); td1.appendChild(el("div", "vp", score(p) + " · касаний " + p.acts.length)); tr.appendChild(td1);
     const td2 = el("td", "hide-s"), vp = p.match.video && p.match.video.parts ? p.match.video.parts : [];
-    if (p.reel) td2.appendChild(el("div", null, "нарезка: " + p.reel.name + " (" + fmt(p.reel.dur) + ")"));
+    if (p.reel) td2.appendChild(el("div", null, "нарезка: " + p.reel.name + " (" + fmt(p.reel.dur) + ")" + (reelKeys.has(k) ? " · ✓ сохранена в приложении" : " · не добавлена")));
     td2.appendChild(el("div", "vp", vp.length ? "весь матч: " + vp.map((x) => x.name).join(", ") : "весь матч: имена файлов не указаны")); tr.appendChild(td2);
     const td3 = el("td"), ac = el("div", "acts"); ac.append(btn("Открыть", () => { curKey = k; setF = "all"; switchTab("match"); }), btn("Удалить", () => { ask = [k]; renderSeason(); }, "danger")); td3.appendChild(ac); tr.appendChild(td3);
     t.appendChild(tr); });
@@ -940,10 +991,13 @@ async function openVideoFiles(list, want) {
   const files = Array.from(list || []).filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(f.name)); if (!files.length) return;
   const p = store.packs[curKey]; files.sort(natCmp);
   const durs = await Promise.all(files.map(probe));
+  if (files.length === 1 && !isReelFile(p, files[0], durs[0])) {   // нарезка другого матча — кладём её туда
+    const k2 = findReelKey(files[0], durs[0]);
+    if (k2 && k2 !== curKey && (want === "reel" || files[0].name === store.packs[k2].reel.name)) { await attachReel(k2, files[0], durs[0], true); player = store.packs[k2].player.num; curKey = k2; renderAll(); note("Это нарезка матча «" + title(store.packs[k2]) + "» — открыта там" + (SIM ? "." : " и сохранена в приложении.")); return; }
+  }
   if (files.length === 1 && (want === "reel" || (want !== "full" && isReelFile(p, files[0], durs[0])))) {
     if (!p.reel) { note("Для этого матча тренер не делал нарезку — откройте видео всего матча."); return; }
-    if (reelV) URL.revokeObjectURL(reelV.url);
-    reelV = { url: URL.createObjectURL(files[0]), name: files[0].name, dur: isFinite(durs[0]) && durs[0] > 0 ? durs[0] : p.reel.dur }; vidFor = curKey; useMode("reel"); return;
+    await attachReel(curKey, files[0], durs[0]); return;
   }
   let arr = files.map((f, i) => ({ name: f.name, url: URL.createObjectURL(f), dur: durs[i] || 0 }));
   const saved = p && p.match.video && p.match.video.parts ? p.match.video.parts : null; let warn = "";
@@ -1184,7 +1238,7 @@ function renderHelp() {
   add("Цели и сезон", ["<b>Мои цели</b> — их ставит тренер; галочка — цель выполнена в матче.", "<b>Как я меняюсь</b> — маленькие графики по каждому действию от матча к матчу.", "<b>Мои рекорды</b> — лучший матч по каждому показателю (показываются, когда матчей хотя бы два и результат заметный).", "Метка <b>«авто»</b> — подобрано приложением по разметке (лучшее в игре, над чем поработать, лучшие моменты и розыгрыши). Это не оценка и не совет тренера; слова тренера — в карточках «Тренер о матче», «Задание от тренера» и в целях.", "<b>Картинка с итогом матча</b> — для родителей или чата команды; на телефоне откроется меню «Поделиться»."]);
   add("Что означают показатели", ["<b>Хорошие</b> — «отлично» и «норм.».", "<b>Эффективность атаки</b> = (очки − ошибки − блоки соперника) / все атаки.", "<b>Вклад на 100 касаний</b> — сколько очков ваши касания добавили команде, в расчёте на 100 касаний.",
     "<b>Над партнёрами</b> — насколько ваши касания лучше (+) или хуже (−) касаний партнёров в тех же действиях того же матча; так честно сравниваются матчи с сильными и слабыми соперниками.", "Цвета и значки качества: ✓ очко или отлично, + норм., · в игре, ! плохо, ✗ ошибка."]);
-  add("Где хранятся данные", ["Матчи хранятся в этом браузере. Сохраните их файлом: ⚙ Настройки → «Сохранить все мои матчи одним файлом». Этот файл можно открыть на другом устройстве.", "Видео в приложение не загружается — оно проигрывается прямо с устройства.", "В файлах только ваши данные: ваши действия, вклад, счёт и время эпизодов."]);
+  add("Где хранятся данные", ["Матчи хранятся в этом браузере. Сохраните их файлом: ⚙ Настройки → «Сохранить все мои матчи одним файлом». Этот файл можно открыть на другом устройстве.", "<b>Нарезки</b> (короткие видео от тренера) сохраняются в приложении: добавьте файл нарезки или архив тренера кнопкой «+ Матч» — нарезка сама встанет к своему матчу и будет открываться сразу. Можно добавить сразу файл матча и нарезку, в любом порядке внутри одного выбора; если нарезка пришла раньше файла матча — добавьте её ещё раз после него.", "Видео всего матча в приложение не загружается — оно проигрывается прямо с устройства.", "В файлах только ваши данные: ваши действия, вклад, счёт и время эпизодов."]);
   const c = card(null); c.appendChild(btn("Показать подсказки первого запуска", () => startTour())); box.appendChild(c);
 }
 const TOUR = [["Добавьте матч", "Нажмите «+ Матч» вверху и выберите файл, который прислал тренер."], ["Откройте видео", "Под видео выберите «Нарезка» (только ваши эпизоды) или «Весь матч»."], ["Смотрите свои моменты", "Нажимайте кнопки «▶ …»: эпизоды пойдут подряд. На телефоне листайте их свайпом по видео."]];

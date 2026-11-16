@@ -144,6 +144,8 @@
         await need(14); let x = M; ctx.font = "7.5px " + FB;
         b.items.forEach(([col, lab]) => { ctx.fillStyle = col; ctx.fillRect(x, y + 1, 7, 8); if (col === "#ffffff" || col.indexOf("rgba") === 0) { ctx.strokeStyle = C.line; ctx.strokeRect(x, y + 1, 7, 8); } text(lab, x + 10, y + 8, "7.5px " + FB, C.muted); x += 14 + ctx.measureText(lab).width + 10; });
         y += 14;
+      } else if (b.t === "page") {
+        if (y > M + 1) { await endPage(); newPage(); }
       } else if (b.t === "table") {
         await drawTable(b);
       } else if (b.t === "svg") {

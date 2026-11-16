@@ -43,7 +43,7 @@ button[aria-pressed="true"]{background:var(--fg);color:var(--panel);border-color
 button[disabled]{opacity:.45;cursor:default}
 button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--m);outline-offset:2px}
 select,input[type=text]{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:.4rem .6rem;min-height:44px;max-width:100%}
-.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--bg);border-bottom:1px solid var(--line);
+.top{position:sticky;top:calc(env(safe-area-inset-top,0px) + var(--vvo,0px));z-index:30;background:var(--bg);border-bottom:1px solid var(--line);
   margin:0 calc(-1 * max(16px,env(safe-area-inset-right,0px))) 12px calc(-1 * max(16px,env(safe-area-inset-left,0px)));
   padding:8px max(16px,env(safe-area-inset-right,0px)) 8px max(16px,env(safe-area-inset-left,0px))}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:31;background:var(--bg)}
@@ -97,7 +97,7 @@ table{border-collapse:collapse;width:100%}
 .notice{background:var(--soft);border:1px solid var(--warn);border-radius:10px;padding:10px 12px;font-size:.9rem;margin-bottom:10px}
 /* видео */
 .vgrid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;align-items:start}
-.vstick{position:sticky;top:calc(env(safe-area-inset-top,0px) + var(--toph,64px));z-index:20;background:var(--panel);display:flex;flex-direction:column;gap:6px}
+.vstick{position:sticky;top:calc(env(safe-area-inset-top,0px) + var(--toph,64px) + var(--vvo,0px));z-index:20;background:var(--panel);display:flex;flex-direction:column;gap:6px}
 .videobox{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9;max-width:100%;touch-action:pan-y}
 video{width:100%;height:100%;display:block}
 .drop{position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;color:#d5dbe5;text-align:center;padding:16px}
@@ -178,7 +178,7 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
 /* нижняя панель вкладок на телефоне */
 @media (max-width:760px){
   :root{--navh:64px}
-  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--panel);border-top:1px solid var(--line);
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;transform:translateY(var(--vvb,0px));background:var(--panel);border-top:1px solid var(--line);
     padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));justify-content:space-around}
   .tabs button{flex:1;flex-direction:column;gap:0;border:0;font-size:.75rem;min-height:52px;background:none}
   .tabs button[aria-pressed="true"]{background:var(--m-soft);color:var(--m)}
@@ -364,6 +364,20 @@ document.querySelectorAll("[data-size]").forEach((b) => b.onclick = () => { pref
 document.querySelectorAll("[data-theme-set]").forEach((b) => b.onclick = () => { prefs.theme = b.dataset.themeSet; savePrefs(); applyPrefs(); });
 $("setBtn").onclick = () => { $("setPanel").hidden = !$("setPanel").hidden; };
 $("setClose").onclick = () => { $("setPanel").hidden = true; };
+/* iPhone: иногда видимая область «съезжает» относительно макета (чаще со встроенным плеером ВК / Rutube) —
+   шапка уходит вверх, нижняя панель оказывается посреди экрана. Привязываем их к видимой области (visualViewport). */
+(function () {
+  const vv = window.visualViewport; if (!vv) return;
+  const R = document.documentElement.style; let raf = 0, nudged = 0;
+  const fix = () => { raf = 0;
+    const zoom = vv.scale > 1.01, o = Math.round(vv.offsetTop), b = Math.round(vv.offsetTop + vv.height - window.innerHeight);
+    const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    R.setProperty("--vvo", (!zoom && o > 1 ? o : 0) + "px"); R.setProperty("--vvb", (!zoom && Math.abs(b) > 1 ? b : 0) + "px");
+    if (!zoom && !typing && Math.abs(b) > 40 && Date.now() - nudged > 2000) { nudged = Date.now(); window.scrollTo(window.scrollX, window.scrollY); } };
+  const q = () => { if (!raf) raf = requestAnimationFrame(fix); };
+  vv.addEventListener("resize", q); vv.addEventListener("scroll", q); window.addEventListener("scroll", q, { passive: true });
+  window.addEventListener("orientationchange", () => setTimeout(q, 350)); window.addEventListener("resize", q); q();
+})();
 function measureTop() { document.documentElement.style.setProperty("--toph", ($("top").offsetHeight || 64) + "px"); }
 window.addEventListener("resize", measureTop);
 

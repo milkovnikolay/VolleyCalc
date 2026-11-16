@@ -422,7 +422,7 @@ async function addPacks(files) {
   renderAll();
   const msg = [];
   if (n) msg.push("Добавлено матчей: " + n);
-  if (got.length) msg.push((got.length === 1 ? "Нарезка добавлена к матчу «" + title(store.packs[got[0]]) + "»" : "Нарезки добавлены к матчам: " + got.length) + (SIM ? "" : " и сохранена в приложении — открывать файл снова не нужно"));
+  if (got.length) msg.push((got.length === 1 ? "Нарезка добавлена к матчу «" + title(store.packs[got[0]]) + "»" : "Нарезки добавлены к матчам: " + got.length) + (SIM ? "" : got.length === 1 ? " и сохранена в приложении — открывать файл снова не нужно" : " и сохранены в приложении — открывать файлы снова не нужно"));
   if (lost.length) msg.push("Видео " + lost.join(", ") + " не подошло ни к одному матчу: сначала добавьте файл матча от тренера (.json), потом нарезку");
   if (bad) msg.push("Не удалось прочитать " + plural(bad, "файл", "файла", "файлов") + ": это не пакет VolleyCalc Игрок");
   if (msg.length) note(msg.join(". ") + ".");

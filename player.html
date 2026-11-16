@@ -197,6 +197,12 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
 .qtxt{margin:0 0 4px 28px}
 .bestme{font-weight:700;margin:6px 0}
 .hwcard{border-left-color:var(--q2)}
+.embfr{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:2;background:#000}
+.exp{font-size:.7rem;background:var(--q2);color:#1b1300;border-radius:999px;padding:1px 6px;margin-left:6px}
+.linkform{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:520px;width:100%}
+.linkform input{flex:1 1 220px;min-width:0}
+.linkhint{flex-basis:100%;font-size:.8rem;opacity:.85}
+.scoreov,.bubble{z-index:3}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 </style>
@@ -738,8 +744,119 @@ let parts = null, pIdx = 0, sw = null, total = 0, rate = 1, vidFor = null;
 let reelV = null;      // { url, name, dur } — файл нарезки
 let fullV = null;      // { parts, total } — весь матч
 let vmode = null;      // "reel" | "full" — что сейчас в плеере
-Object.defineProperty(vid, "currentTime", { configurable: true, get() { if (!parts) return NCT.get.call(vid); if (sw) return sw.t; return parts[pIdx].off + NCT.get.call(vid); }, set(t) { if (!parts) { NCT.set.call(vid, t); return; } go(t); } });
-Object.defineProperty(vid, "duration", { configurable: true, get() { return parts ? total : NDUR.get.call(vid); } });
+/* ---------- видео по ссылке ВК / Rutube (экспериментально) ----------
+   Внутри страницы показывается плеер сервиса; свойства <video> (время, пауза, скорость, события) подменяются,
+   чтобы разметка, клипы и табло работали как с обычным файлом. Нарезки и покадровый шаг здесь невозможны. */
+function vcEmbedParse(input) {
+  let s = String(input || "").trim(); if (!s) return null;
+  const m0 = s.match(/src\s*=\s*["']([^"']+)["']/i); if (m0) s = m0[1];
+  if (s.indexOf("//") === 0) s = "https:" + s;
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+  let u; try { u = new URL(s.replace(/&amp;/g, "&")); } catch (e) { return null; }
+  const h = u.hostname.replace(/^(www|m)\./, "");
+  if (/(^|\.)(vk\.com|vk\.ru|vkvideo\.ru)$/.test(h)) {
+    let oid = u.searchParams.get("oid"), id = u.searchParams.get("id"), hash = u.searchParams.get("hash");
+    if (!(oid && id)) { const mm = (u.pathname + "?" + u.search + u.hash).match(/video(-?\d+)_(\d+)/); if (!mm) return null; oid = mm[1]; id = mm[2]; }
+    if (!hash) { const hm = (u.search + u.hash).match(/[?&#](?:hash|access_key)=([0-9a-f]+)/i); if (hm) hash = hm[1]; }
+    return { kind: "vk", name: "ВК", src: "https://vk.com/video_ext.php?oid=" + oid + "&id=" + id + (hash ? "&hash=" + hash : "") + "&hd=2&js_api=1", url: s };
+  }
+  if (/(^|\.)rutube\.ru$/.test(h)) {
+    const mm = u.pathname.match(/\/(?:video(?:\/private)?|play\/embed|embed)\/([0-9a-f]{32})/i); if (!mm) return null;
+    const p = u.searchParams.get("p");
+    return { kind: "rt", name: "Rutube", src: "https://rutube.ru/play/embed/" + mm[1] + (p ? "?p=" + encodeURIComponent(p) : ""), url: s };
+  }
+  return null;
+}
+function vcEmbed(vid, box) {
+  const P = HTMLMediaElement.prototype;
+  const NSRC = Object.getOwnPropertyDescriptor(P, "src"), NPAUSED = Object.getOwnPropertyDescriptor(P, "paused"), NRATE = Object.getOwnPropertyDescriptor(P, "playbackRate");
+  const NPLAY = P.play, NPAUSE = P.pause;
+  const E = { on: false, kind: "", url: "", src: "", t: 0, at: 0, playing: false, dur: 0, rate: 1, fr: null, vk: null, tick: null, poll: null, msg: null, lastSeek: 0 };
+  const fire = (n) => vid.dispatchEvent(new Event(n));
+  const now = () => E.playing ? E.t + (performance.now() - E.at) / 1000 * E.rate : E.t;
+  const setT = (t) => { if (typeof t !== "number" || !isFinite(t)) return; if (performance.now() - E.lastSeek < 700) return; E.t = t; E.at = performance.now(); };
+  const setPlaying = (p) => { if (p === E.playing) return; E.t = now(); E.at = performance.now(); E.playing = p; fire(p ? "play" : "pause"); };
+  const setDur = (d) => { if (d > 0 && Math.abs(d - E.dur) > 0.5) { E.dur = d; fire("loadedmetadata"); fire("durationchange"); } };
+  Object.defineProperty(vid, "src", { configurable: true, get() { return E.on ? "embed:" + E.src : NSRC.get.call(vid); }, set(v) { NSRC.set.call(vid, v); } });
+  Object.defineProperty(vid, "paused", { configurable: true, get() { return E.on ? !E.playing : NPAUSED.get.call(vid); } });
+  Object.defineProperty(vid, "playbackRate", { configurable: true, get() { return E.on ? E.rate : NRATE.get.call(vid); }, set(r) { if (!E.on) { NRATE.set.call(vid, r); return; } setRate(r); } });
+  vid.play = function () { if (!E.on) return NPLAY.call(vid); cmd("play"); return Promise.resolve(); };
+  vid.pause = function () { if (!E.on) return NPAUSE.call(vid); cmd("pause"); };
+  function rt(type, data) { try { E.fr.contentWindow.postMessage(JSON.stringify({ type: "player:" + type, data: data || {} }), "*"); } catch (e) {} }
+  function cmd(c, arg) {
+    if (!E.on) return;
+    if (E.kind === "rt") { if (c === "play") rt("play"); else if (c === "pause") rt("pause"); else if (c === "seek") rt("setCurrentTime", { time: arg }); }
+    else if (E.vk) { try { if (c === "play") E.vk.play(); else if (c === "pause") E.vk.pause(); else if (c === "seek") E.vk.seek(arg); } catch (e) {} }
+    if (c === "play") setPlaying(true); if (c === "pause") setPlaying(false);
+  }
+  function setRate(r) {
+    const ok = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]; const v = ok.reduce((a, b) => Math.abs(b - r) < Math.abs(a - r) ? b : a, 1);
+    E.t = now(); E.at = performance.now();
+    if (E.kind === "rt") { E.rate = v; rt("setPlaybackSpeed", { speed: v }); } else E.rate = 1;   // у ВК управления скоростью в API нет
+  }
+  function seek(t) { t = Math.max(0, E.dur ? Math.min(E.dur - 0.2, t) : t); E.t = t; E.at = performance.now(); E.lastSeek = performance.now(); cmd("seek", t); setTimeout(() => fire("seeked"), 400); }
+  function onMsg(ev) {
+    if (!E.on || !E.fr || ev.source !== E.fr.contentWindow) return;
+    let d = ev.data; if (typeof d === "string") { try { d = JSON.parse(d); } catch (e) { return; } }
+    if (!d || !d.type) return; const x = d.data || {};
+    if (d.type === "player:currentTime") { setT(+(x.time != null ? x.time : x.currentTime)); if (x.duration) setDur(+x.duration); }
+    else if (d.type === "player:durationChange") setDur(+x.duration);
+    else if (d.type === "player:changeState") { if (x.state === "playing") setPlaying(true); else if (/pause|completed|stopped/.test(x.state)) setPlaying(false); if (x.state === "seeked") fire("seeked"); }
+    else if (d.type === "player:ready") { E.ready = true; status(""); }
+    else if (d.type === "player:playbackSpeedChanged" && x.speed) E.rate = +x.speed;
+    else if (d.type === "player:error") status("Rutube: " + (x.message || "ошибка плеера"));
+  }
+  let statusEl = null; function status(t) { if (statusEl) statusEl(t); }
+  function loadVkApi() {
+    if (window.VK && window.VK.VideoPlayer) return Promise.resolve();
+    const one = (src) => new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = () => (window.VK && window.VK.VideoPlayer ? res() : rej()); s.onerror = rej; document.head.appendChild(s); });
+    return one("https://vk.com/js/api/videoplayer.js").catch(() => one("https://vk.ru/js/api/videoplayer.js"));
+  }
+  function open(spec, onStatus) {
+    close(); statusEl = onStatus || null;
+    Object.assign(E, { on: true, kind: spec.kind, url: spec.url, src: spec.src, t: 0, at: performance.now(), playing: false, dur: 0, rate: 1, vk: null, ready: false });
+    try { NPAUSE.call(vid); NSRC.set.call(vid, ""); vid.removeAttribute("src"); } catch (e) {}
+    vid.style.visibility = "hidden";
+    const fr = E.fr = document.createElement("iframe"); fr.className = "embfr"; fr.src = spec.src; fr.allow = "autoplay; fullscreen; encrypted-media; picture-in-picture"; fr.setAttribute("allowfullscreen", ""); fr.title = "Видео " + spec.name;
+    box.appendChild(fr);
+    if (spec.kind === "rt") { E.msg = onMsg; window.addEventListener("message", onMsg); }
+    else {
+      status("Подключаю плеер ВК…");
+      fr.addEventListener("load", () => {
+        loadVkApi().then(() => {
+          if (!E.on || E.fr !== fr) return;
+          const pl = E.vk = window.VK.VideoPlayer(fr);
+          const on = (n, f) => { try { pl.on(n, f); } catch (e) {} };
+          on("inited", () => { status(""); try { setDur(+pl.getDuration()); } catch (e) {} });
+          on("started", () => setPlaying(true)); on("resumed", () => setPlaying(true)); on("paused", () => setPlaying(false)); on("ended", () => setPlaying(false));
+          on("timeupdate", (st) => { const t = st && (st.time != null ? st.time : st.currentTime); if (t != null) setT(+t); });
+          E.poll = setInterval(() => { try { const d = +pl.getDuration(); if (d) setDur(d); const t = +pl.getCurrentTime(); if (isFinite(t) && Math.abs(t - now()) > 1.5) setT(t); } catch (e) {} }, 1000);
+        }).catch(() => status("Не удалось подключить управление плеером ВК — видео можно смотреть, но разметка по времени работать не будет."));
+      });
+    }
+    E.tick = setInterval(() => { if (E.on && E.playing) fire("timeupdate"); }, 250);
+    fire("emptied");
+  }
+  function close() {
+    if (!E.on) return; E.on = false; E.playing = false;
+    clearInterval(E.tick); clearInterval(E.poll); if (E.msg) window.removeEventListener("message", E.msg); E.msg = null;
+    if (E.fr) E.fr.remove(); E.fr = null; E.vk = null; vid.style.visibility = ""; fire("emptied");
+  }
+  return { open, close, seek, time: now, get on() { return E.on; }, get dur() { return E.dur; }, get kind() { return E.kind; }, get url() { return E.url; } };
+}
+const emb = vcEmbed(vid, $("vbox"));
+const hasVid = () => emb.on || !!vid.getAttribute("src");
+Object.defineProperty(vid, "currentTime", { configurable: true, get() { if (emb.on) return emb.time(); if (!parts) return NCT.get.call(vid); if (sw) return sw.t; return parts[pIdx].off + NCT.get.call(vid); }, set(t) { if (emb.on) { emb.seek(t); return; } if (!parts) { NCT.set.call(vid, t); return; } go(t); } });
+Object.defineProperty(vid, "duration", { configurable: true, get() { return emb.on ? emb.dur : parts ? total : NDUR.get.call(vid); } });
+/* Видео всего матча по ссылке ВК / Rutube (экспериментально) — ссылку даёт тренер в пакете или вставляет игрок. */
+function openLinkP(raw) {
+  const spec = vcEmbedParse(raw); if (!spec) { note("Не понял ссылку: нужна ссылка на видео ВК или Rutube."); return; }
+  const keep = pl && pl.items.length ? pl.i : null;
+  vid.pause(); sw = null; parts = null;
+  emb.open(spec, (t) => { if (t) $("clipInfo").textContent = t; });
+  vmode = "link"; vidFor = curKey; $("drop").hidden = true; renderSrc();
+  if (keep != null) setTimeout(() => playAt(keep, true), 1500);
+}
 const partAt = (t) => { let i = 0; parts.forEach((p, k) => { if (t >= p.off) i = k; }); return i; };
 function go(t, play) {
   t = Math.max(0, Math.min(total - 0.05, t)); const i = partAt(t);
@@ -780,7 +897,8 @@ async function openVideoFiles(list, want) {
 /* Переключение «нарезка ↔ весь матч» без потери текущего эпизода. */
 function useMode(mode) {
   const keep = pl && pl.items.length ? pl.i : null;
-  vid.pause(); sw = null;
+  if (mode === "link") { const p = store.packs[curKey]; if (p && p.match.video && p.match.video.link) openLinkP(p.match.video.link); return; }
+  vid.pause(); sw = null; if (emb.on) emb.close();
   if (mode === "reel" && reelV) { parts = null; vid.src = reelV.url; vmode = "reel"; }
   else if (mode === "full" && fullV) { parts = fullV.parts; total = fullV.total; pIdx = Math.max(0, parts.findIndex((x) => x.url)); vid.src = parts[pIdx].url; vmode = "full"; }
   else return;
@@ -789,6 +907,7 @@ function useMode(mode) {
 }
 function syncVideoFor(p) {
   if (vidFor && (p === null || vidFor !== curKey)) {
+    if (emb.on) emb.close();
     vid.removeAttribute("src"); vid.load(); parts = null; vidFor = null; vmode = null;
     if (reelV) URL.revokeObjectURL(reelV.url); reelV = null; if (fullV) fullV.parts.forEach((x) => x.url && URL.revokeObjectURL(x.url)); fullV = null;
   }
@@ -803,13 +922,22 @@ function renderSrc() {
   if (hasReel) { $("dropText").appendChild(el("br")); $("dropText").appendChild(el("span", null, "Нарезка — короткий файл только с вашими эпизодами (удобно на телефоне). Весь матч — если хотите смотреть розыгрыши целиком.")); }
   if (hasReel) db.appendChild(btn("Нарезка…", () => pickVideo("reel"), "primary"));
   db.appendChild(btn(hasReel ? "Весь матч…" : "Выбрать видео…", () => pickVideo("full"), hasReel ? "" : "primary"));
+  const link = p.match.video && p.match.video.link;
+  if (link) { const b = btn("▶ Видео по ссылке тренера", () => openLinkP(link)); b.appendChild(el("span", "exp", "экспериментально")); db.appendChild(b); }
+  const lb = btn("Своя ссылка ВК / Rutube…", () => { const f = $("linkFormP"); f.hidden = !f.hidden; if (!f.hidden) $("linkUrlP").focus(); }, "x"); db.appendChild(lb);
+  const lf = el("span", "linkform"); lf.id = "linkFormP"; lf.hidden = true;
+  const li = el("input"); li.id = "linkUrlP"; li.placeholder = "Ссылка на видео ВК или Rutube"; li.setAttribute("aria-label", "Ссылка на видео");
+  li.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") openLinkP(li.value); });
+  lf.append(li, btn("Открыть", () => openLinkP(li.value)), el("span", "linkhint", "Может работать некорректно: время — примерно, нарезки и покадрового шага нет."));
+  db.appendChild(lf);
   if (!vmode) return;
   box.appendChild(el("span", "muted", "Видео:"));
   const seg = el("span", "seg"); seg.setAttribute("role", "group");
   const b1 = btn(reelV ? "Нарезка" : "Нарезка…", () => reelV ? useMode("reel") : pickVideo("reel")); b1.setAttribute("aria-pressed", String(vmode === "reel")); b1.hidden = !hasReel;
   const b2 = btn(fullV ? "Весь матч" : "Весь матч…", () => fullV ? useMode("full") : pickVideo("full")); b2.setAttribute("aria-pressed", String(vmode === "full"));
-  seg.append(b1, b2); box.appendChild(seg);
-  box.appendChild(el("span", "muted", vmode === "reel" ? reelV.name + " · " + fmt(reelV.dur) : (fullV.parts.length > 1 ? fullV.parts.length + " части · " : "") + fmt(fullV.total) + (fullV.warn ? " · " + fullV.warn : "")));
+  const b3 = btn("По ссылке", () => useMode("link")); b3.setAttribute("aria-pressed", String(vmode === "link")); b3.hidden = !link;
+  seg.append(b1, b2, b3); box.appendChild(seg);
+  box.appendChild(el("span", "muted", vmode === "link" ? "⚠ ВК / Rutube — экспериментально, может работать некорректно" : vmode === "reel" ? reelV.name + " · " + fmt(reelV.dur) : fullV ? (fullV.parts.length > 1 ? fullV.parts.length + " части · " : "") + fmt(fullV.total) + (fullV.warn ? " · " + fullV.warn : "") : ""));
 }
 async function pickVideo(want) {
   const fs = await pickOpen("vidInput", want === "reel" ? "vc-player-reel" : "vc-player-video", [{ description: want === "reel" ? "Нарезка" : "Видео матча", accept: { "video/*": [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"] } }], want !== "reel");
@@ -821,13 +949,13 @@ $("vidInput").onchange = (e) => { openVideoFiles(e.target.files, e.target.datase
 function reelSeg(p, ri) { return p.reel ? p.reel.segs.find((s) => s.ri === ri) : null; }
 function toVideo(p, t, ri) { if (vmode !== "reel") return t; const s = (ri != null ? reelSeg(p, ri) : null) || p.reel.segs.find((x) => t >= x.s - 0.05 && t <= x.e + 0.05); return s ? s.r0 + Math.max(0, Math.min(s.e, t) - s.s) : null; }
 function toMatch(p, vt) { if (vmode !== "reel" || !p.reel) return vt; const s = p.reel.segs.find((x) => vt >= x.r0 - 0.02 && vt <= x.r0 + (x.e - x.s) + 0.02); return s ? s.s + (vt - s.r0) : null; }
-const togglePlay = () => { if (!vid.getAttribute("src")) return; if (vid.paused) vid.play(); else vid.pause(); };
+const togglePlay = () => { if (!hasVid()) return; if (vid.paused) vid.play(); else vid.pause(); };
 $("play").onclick = togglePlay;
 vid.addEventListener("play", () => { $("play").textContent = "❚❚"; document.querySelector('#fsctl [data-act="play"]').textContent = "❚❚"; });
 vid.addEventListener("pause", () => { $("play").textContent = "▶"; document.querySelector('#fsctl [data-act="play"]').textContent = "▶"; });
 function setRate(r) { rate = r; vid.playbackRate = r; document.querySelectorAll("[data-rate]").forEach((x) => x.setAttribute("aria-pressed", String(+x.dataset.rate === r))); document.querySelector('#fsctl [data-act="slow"]').setAttribute("aria-pressed", String(r < 1)); }
 document.querySelectorAll("[data-rate]").forEach((b) => b.onclick = () => setRate(+b.dataset.rate));
-function frame(d) { if (!vid.getAttribute("src")) return; vid.pause(); if (pl) pl.playing = false; vid.currentTime = Math.max(0, vid.currentTime + d / 30); }
+function frame(d) { if (!hasVid()) return; vid.pause(); if (pl) pl.playing = false; vid.currentTime = Math.max(0, vid.currentTime + d / 30); }
 $("fBack").onclick = () => frame(-1); $("fFwd").onclick = () => frame(1);
 let loop = false;
 function setLoop(v) { loop = v; $("loopBtn").setAttribute("aria-pressed", String(v)); document.querySelector('#fsctl [data-act="loop"]').setAttribute("aria-pressed", String(v)); }
@@ -841,7 +969,7 @@ $("fsctl").addEventListener("click", (e) => { const b = e.target.closest("button
 let tx0 = null, ty0 = null;
 $("vbox").addEventListener("touchstart", (e) => { if (e.touches.length === 1) { tx0 = e.touches[0].clientX; ty0 = e.touches[0].clientY; } }, { passive: true });
 $("vbox").addEventListener("touchend", (e) => { if (tx0 == null || !pl) return; const t = e.changedTouches[0], dx = t.clientX - tx0, dy = t.clientY - ty0; tx0 = null; if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) playAt(pl.i + (dx < 0 ? 1 : -1)); });
-$("vbox").addEventListener("click", (e) => { if (e.target === vid && vid.getAttribute("src")) togglePlay(); });
+$("vbox").addEventListener("click", (e) => { if (e.target === vid && hasVid()) togglePlay(); });
 let dragging = false;
 function renderScoreOv() {
   const o = $("scoreOv"), p = curKey && store.packs[curKey];
@@ -863,7 +991,7 @@ vid.addEventListener("seeked", renderScoreOv); vid.addEventListener("emptied", r
 vid.addEventListener("timeupdate", () => { renderScoreOv(); $("time").textContent = fmt(vid.currentTime) + " / " + fmt(vid.duration); if (!dragging) $("seek").value = vid.currentTime || 0; clipTick(); });
 vid.addEventListener("durationchange", () => { const d = vid.duration; $("seek").max = isFinite(d) ? d : 0; $("seek").disabled = !(d > 0); });
 $("seek").addEventListener("pointerdown", () => { dragging = true; if (pl) pl.playing = false; });
-$("seek").addEventListener("input", () => { if (vid.getAttribute("src")) vid.currentTime = +$("seek").value; });
+$("seek").addEventListener("input", () => { if (hasVid()) vid.currentTime = +$("seek").value; });
 $("seek").addEventListener("change", () => { dragging = false; });
 
 /* ---------- эпизоды: список, повтор, сравнение ---------- */

@@ -98,6 +98,12 @@ video{width:100%;height:100%;display:block}
 .drop{position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;color:#cfd6e2;text-align:center;padding:20px}
 .drop p{margin:0;max-width:46ch}
 .drop button{color:var(--fg)}
+.embfr{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:2;background:#000}
+.linkbtn .exp,.exp{font-size:11px;background:#e69f00;color:#1b1300;border-radius:999px;padding:1px 6px;margin-left:4px}
+.linkform{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:520px}
+.linkform input{flex:1 1 280px;min-width:0}
+.linkhint{flex-basis:100%;font-size:12px;opacity:.85}
+.embwarn{font-size:12px;color:var(--warn);padding:2px 0 4px}
 .transport{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
 .time{font-family:var(--f-mono);font-variant-numeric:tabular-nums;margin-left:auto;color:var(--muted)}
 .speed button[aria-pressed="true"]{background:var(--m);color:#fff;border-color:var(--m)}
@@ -373,6 +379,10 @@ svg.tl .mk:hover{stroke:var(--fg);stroke-width:1}
         <div class="drop" id="drop">
           <p><b>Откройте видео матча</b> с вашего компьютера.</p>
           <button type="button" id="pick">Выбрать файл…</button>
+          <button type="button" id="linkSaved" hidden></button>
+          <button type="button" id="linkBtn" class="linkbtn">Видео по ссылке ВК / Rutube… <span class="exp">экспериментально</span></button>
+          <span id="linkForm" class="linkform" hidden><input id="linkUrl" placeholder="Ссылка на видео ВК или Rutube" aria-label="Ссылка на видео"><button type="button" id="linkGo">Открыть</button>
+            <span class="linkhint">Может работать некорректно. Видео должно быть доступно по ссылке. Для закрытого видео ВК вставьте код встраивания («Поделиться» → «Экспортировать»).</span></span>
           <input type="file" id="file" accept="video/*" multiple hidden>
           <input type="file" id="fileAdd" accept="video/*" multiple hidden><input type="file" id="filePart" accept="video/*" hidden>
           <p style="font-size:13px;opacity:.8">Если игра записана частями, выберите все файлы сразу — они соберутся в одно видео по порядку имён. Видео не загружается в интернет — оно проигрывается прямо с диска. Можно перетащить файлы сюда.</p>
@@ -585,6 +595,7 @@ svg.tl .mk:hover{stroke:var(--fg);stroke-width:1}
       <p>Пока вы работаете, приложение дополнительно держит копию в этом браузере, но она может пропасть при очистке браузера. Надёжная копия — файл.</p>
       <p><b>Где открываются диалоги.</b> Окна «Открыть файл…», выбора видео и сохранения (разметка, PDF, пакеты) сразу открываются в папке, выбранной кнопкой «Выбрать папку…» — укажите в ней «Документы\VolleyCalc\VolleyCalc». Пока папка не выбрана, они начинаются в «Документах». Браузер не даёт странице самой узнать, где лежит её файл, поэтому папку нужно указать один раз вручную.</p>
       <p>Видео никуда не загружается: оно проигрывается с вашего диска, и при каждом открытии матча его нужно выбрать заново.</p>
+      <p><b>Видео по ссылке ВК / Rutube (экспериментально).</b> Вместо файла можно вставить ссылку на видео ВК (vk.com/video…, vkvideo.ru/video…) или Rutube (rutube.ru/video/…): «Видео по ссылке ВК / Rutube…» на чёрном поле видео. Видео показывается плеером сервиса, а разметка, клипы и табло работают по его времени. Ограничения: может работать некорректно; время у ВК — с точностью до секунды; замедление — только у Rutube; покадрового шага и нарезок нет; видео должно быть доступно по ссылке (у закрытого видео ВК вставьте код встраивания из «Поделиться» → «Экспортировать»); если сервис изменит свой плеер, режим может перестать работать. Ссылка запоминается в разметке игры. Галочка «передавать эту ссылку игрокам в пакетах» отдаёт её игрокам — учтите, что по ссылке виден весь матч.</p>
       <p><b>Игра записана частями.</b> Выберите все файлы сразу (или перетащите их вместе) — приложение соберёт их в одно видео с общей шкалой времени: части идут подряд в порядке имён файлов (часть 2 раньше части 10). Под видео — список частей с их временем, ▶ переходит к началу части; на полосе под видео границы частей отмечены синими чертами.</p>
       <p><b>Файлы называются иначе.</b> Если видео переименовали или скопировали под другими названиями, просто выберите его файлы: приложение сопоставит их с частями разметки сначала по имени, затем по длительности, а остальные — по порядку имён, и запомнит новые названия. Если длина файла не совпадает с той, к которой делалась разметка, появится предупреждение — проверьте, совпадают ли отметки с видео. Для части, оставшейся без видео, в списке частей есть кнопка «Указать файл…», а кнопка «⇄» заменяет файл части.</p>
       <p><b>Добавить часть позже.</b> Кнопка «+ Добавить часть…» в списке частей добавляет новые файлы в конец, не трогая уже сделанную разметку. Так можно размечать игру по мере появления записей.</p>

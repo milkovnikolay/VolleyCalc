@@ -1,5 +1,5 @@
 /* VolleyCalc: работает без интернета. Страница — сначала из сети (чтобы приходили обновления), при отсутствии сети — из кэша. */
-const CACHE = "vc-site-v19";
+const CACHE = "vc-site-v20";
 const FILES = ["./", "./index.html", "./coach.html", "./coach.dat", "./stats.js", "./pdf.js", "./player.html", "./about.html", "./img/razmetka.jpg", "./img/statistika.jpg", "./img/junior.jpg", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });

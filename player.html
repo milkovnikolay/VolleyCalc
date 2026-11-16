@@ -205,6 +205,7 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
 .scoreov,.bubble{z-index:3}
 .howto{background:var(--soft);border-radius:12px;padding:10px 12px;margin-top:10px}
 .howto ol{margin:6px 0 0;padding-left:1.3em}
+.src a{display:inline-flex;align-items:center;min-height:40px;padding:0 .6rem;border:1px solid var(--line);border-radius:10px;color:var(--fg);text-decoration:none;font-size:.85rem;background:var(--panel)}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 </style>
@@ -845,8 +846,11 @@ function vcEmbed(vid, box) {
     const one = (src) => new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = () => (window.VK && window.VK.VideoPlayer ? res() : rej()); s.onerror = rej; document.head.appendChild(s); });
     return one("https://vk.com/js/api/videoplayer.js").catch(() => one("https://vk.ru/js/api/videoplayer.js"));
   }
+  let lastSpec = null, lastStatus = null;
+  /* Перезагрузить плеер сервиса (если в нём открылась капча, чужая страница или он завис) — с того же места. */
+  function reload() { if (!lastSpec) return; const t = E.on ? now() : 0; open(lastSpec, lastStatus); if (t > 1) setTimeout(() => seek(t), 2500); }
   function open(spec, onStatus) {
-    close(); statusEl = onStatus || null;
+    close(); statusEl = onStatus || null; lastSpec = spec; lastStatus = onStatus || null;
     Object.assign(E, { on: true, kind: spec.kind, url: spec.url, src: spec.src, t: 0, at: performance.now(), playing: false, dur: 0, rate: 1, vk: null, ready: false });
     try { NPAUSE.call(vid); NSRC.set.call(vid, ""); vid.removeAttribute("src"); } catch (e) {}
     vid.style.visibility = "hidden";
@@ -875,18 +879,20 @@ function vcEmbed(vid, box) {
     clearInterval(E.tick); clearInterval(E.poll); if (E.msg) window.removeEventListener("message", E.msg); E.msg = null;
     if (E.fr) E.fr.remove(); E.fr = null; E.vk = null; vid.style.visibility = ""; fire("emptied");
   }
-  return { open, close, seek, time: now, get on() { return E.on; }, get dur() { return E.dur; }, get kind() { return E.kind; }, get url() { return E.url; } };
+  return { open, close, reload, seek, time: now, get on() { return E.on; }, get dur() { return E.dur; }, get kind() { return E.kind; }, get url() { return E.url; } };
 }
 const emb = vcEmbed(vid, $("vbox"));
 const hasVid = () => emb.on || !!vid.getAttribute("src");
 Object.defineProperty(vid, "currentTime", { configurable: true, get() { if (emb.on) return emb.time(); if (!parts) return NCT.get.call(vid); if (sw) return sw.t; return parts[pIdx].off + NCT.get.call(vid); }, set(t) { if (emb.on) { emb.seek(t); return; } if (!parts) { NCT.set.call(vid, t); return; } go(t); } });
 Object.defineProperty(vid, "duration", { configurable: true, get() { return emb.on ? emb.dur : parts ? total : NDUR.get.call(vid); } });
 /* Видео всего матча по ссылке ВК / Rutube (экспериментально) — ссылку даёт тренер в пакете или вставляет игрок. */
+function linkOf(p) { return p ? (p.match.video && p.match.video.link) || (store.links && store.links[curKey]) || "" : ""; }
 function openLinkP(raw) {
   const spec = vcEmbedParse(raw); if (!spec) { note("Не понял ссылку: нужна ссылка на видео ВК или Rutube."); return; }
   const keep = pl && pl.items.length ? pl.i : null;
   vid.pause(); sw = null; parts = null;
   emb.open(spec, (t) => { if (t) $("clipInfo").textContent = t; });
+  const pk = store.packs[curKey]; if (pk && !(pk.match.video && pk.match.video.link === spec.url)) { store.links = store.links || {}; store.links[curKey] = spec.url; persist(); }
   vmode = "link"; vidFor = curKey; $("drop").hidden = true; renderSrc();
   if (keep != null) setTimeout(() => playAt(keep, true), 1500);
 }
@@ -930,7 +936,7 @@ async function openVideoFiles(list, want) {
 /* Переключение «нарезка ↔ весь матч» без потери текущего эпизода. */
 function useMode(mode) {
   const keep = pl && pl.items.length ? pl.i : null;
-  if (mode === "link") { const p = store.packs[curKey]; if (p && p.match.video && p.match.video.link) openLinkP(p.match.video.link); return; }
+  if (mode === "link") { const L = linkOf(store.packs[curKey]); if (L) openLinkP(L); return; }
   vid.pause(); sw = null; if (emb.on) emb.close();
   if (mode === "reel" && reelV) { parts = null; vid.src = reelV.url; vmode = "reel"; }
   else if (mode === "full" && fullV) { parts = fullV.parts; total = fullV.total; pIdx = Math.max(0, parts.findIndex((x) => x.url)); vid.src = parts[pIdx].url; vmode = "full"; }
@@ -955,8 +961,8 @@ function renderSrc() {
   if (hasReel) { $("dropText").appendChild(el("br")); $("dropText").appendChild(el("span", null, "Нарезка — короткий файл только с вашими эпизодами (удобно на телефоне). Весь матч — если хотите смотреть розыгрыши целиком.")); }
   if (hasReel) db.appendChild(btn("Нарезка…", () => pickVideo("reel"), "primary"));
   db.appendChild(btn(hasReel ? "Весь матч…" : "Выбрать видео…", () => pickVideo("full"), hasReel ? "" : "primary"));
-  const link = p.match.video && p.match.video.link;
-  if (link) { const b = btn("▶ Видео по ссылке тренера", () => openLinkP(link)); b.appendChild(el("span", "exp", "экспериментально")); db.appendChild(b); }
+  const link = linkOf(p), coachLink = p.match.video && p.match.video.link;
+  if (link) { const b = btn(coachLink ? "▶ Видео по ссылке тренера" : "▶ Видео по моей ссылке", () => openLinkP(link)); b.appendChild(el("span", "exp", "экспериментально")); db.appendChild(b); }
   const lb = btn("Своя ссылка ВК / Rutube…", () => { const f = $("linkFormP"); f.hidden = !f.hidden; if (!f.hidden) $("linkUrlP").focus(); }, "x"); db.appendChild(lb);
   const lf = el("span", "linkform"); lf.id = "linkFormP"; lf.hidden = true;
   const li = el("input"); li.id = "linkUrlP"; li.placeholder = "Ссылка на видео ВК или Rutube"; li.setAttribute("aria-label", "Ссылка на видео");
@@ -970,7 +976,11 @@ function renderSrc() {
   const b2 = btn(fullV ? "Весь матч" : "Весь матч…", () => fullV ? useMode("full") : pickVideo("full")); b2.setAttribute("aria-pressed", String(vmode === "full"));
   const b3 = btn("По ссылке", () => useMode("link")); b3.setAttribute("aria-pressed", String(vmode === "link")); b3.hidden = !link;
   seg.append(b1, b2, b3); box.appendChild(seg);
-  box.appendChild(el("span", "muted", vmode === "link" ? "⚠ ВК / Rutube — экспериментально, может работать некорректно" : vmode === "reel" ? reelV.name + " · " + fmt(reelV.dur) : fullV ? (fullV.parts.length > 1 ? fullV.parts.length + " части · " : "") + fmt(fullV.total) + (fullV.warn ? " · " + fullV.warn : "") : ""));
+  if (vmode === "link") {
+    box.appendChild(btn("⟳ Перезагрузить видео", () => { emb.reload(); $("clipInfo").textContent = "Плеер перезагружен"; }, "x"));
+    const a = el("a", "x", "Открыть на сайте " + (emb.kind === "rt" ? "Rutube" : "ВК")); a.href = emb.url; a.target = "_blank"; a.rel = "noopener"; box.appendChild(a);
+  }
+  box.appendChild(el("span", "muted", vmode === "link" ? "⚠ ВК / Rutube — экспериментально. Если вместо видео капча или другая страница — «⟳ Перезагрузить видео»; капчу можно пройти на сайте сервиса." : vmode === "reel" ? reelV.name + " · " + fmt(reelV.dur) : fullV ? (fullV.parts.length > 1 ? fullV.parts.length + " части · " : "") + fmt(fullV.total) + (fullV.warn ? " · " + fullV.warn : "") : ""));
 }
 async function pickVideo(want) {
   const fs = await pickOpen("vidInput", want === "reel" ? "vc-player-reel" : "vc-player-video", [{ description: want === "reel" ? "Нарезка" : "Видео матча", accept: { "video/*": [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"] } }], want !== "reel");

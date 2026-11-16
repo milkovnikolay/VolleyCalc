@@ -203,6 +203,8 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
 .linkform input{flex:1 1 220px;min-width:0}
 .linkhint{flex-basis:100%;font-size:.8rem;opacity:.85}
 .scoreov,.bubble{z-index:3}
+.howto{background:var(--soft);border-radius:12px;padding:10px 12px;margin-top:10px}
+.howto ol{margin:6px 0 0;padding-left:1.3em}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 </style>
@@ -221,7 +223,7 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
   </nav>
   <button type="button" id="setBtn" aria-label="Настройки" title="Настройки">⚙</button>
   <button type="button" class="primary" id="addPack">+ Матч</button>
-  <input type="file" id="packInput" accept=".json,application/json" multiple hidden>
+  <input type="file" id="packInput" accept=".json,.zip,application/json,application/zip,application/octet-stream,text/plain" multiple hidden>
 </div></header>
 
 <main>
@@ -365,8 +367,26 @@ function note(t) { const box = tab === "season" ? $("tab-season") : $("matchBody
 function players() { const m = {}; Object.values(store.packs).forEach((p) => { m[p.player.num] = p.player; }); return m; }
 function packsOf(num) { return Object.entries(store.packs).filter(([k, p]) => p.player.num === num).sort((a, b) => String(a[1].match.date).localeCompare(String(b[1].match.date)) || String(a[1].exported || "").localeCompare(String(b[1].exported || ""))); }
 /* Пакет одного матча (.json) или файл сезона («Мой сезон»), где пакетов несколько. */
+/* Архив .zip без сжатия (так сохраняет тренерское приложение): достаём из него файлы .json. */
+async function unzipJson(f) {
+  const b = new Uint8Array(await f.arrayBuffer()), dv = new DataView(b.buffer), out = [], dec = new TextDecoder();
+  let i = 0;
+  while (i + 30 <= b.length && dv.getUint32(i, true) === 0x04034b50) {
+    const method = dv.getUint16(i + 8, true), size = dv.getUint32(i + 18, true), nl = dv.getUint16(i + 26, true), xl = dv.getUint16(i + 28, true);
+    const name = dec.decode(b.subarray(i + 30, i + 30 + nl)), st = i + 30 + nl + xl;
+    if (method === 0 && /\.json$/i.test(name)) out.push(new File([b.subarray(st, st + size)], name.split("/").pop(), { type: "application/json" }));
+    else if (method === 8 && /\.json$/i.test(name) && typeof DecompressionStream !== "undefined") {
+      const ds = new Blob([b.subarray(st, st + size)]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      out.push(new File([await new Response(ds).blob()], name.split("/").pop(), { type: "application/json" }));
+    }
+    i = st + size;
+  }
+  return out;
+}
 async function addPacks(files) {
   let n = 0, bad = 0;
+  const flat = []; for (const f of files) { if (/\.zip$/i.test(f.name) || f.type === "application/zip") { try { flat.push(...await unzipJson(f)); } catch (e) { bad++; } } else flat.push(f); }
+  files = flat;
   const put = (p) => { store.packs[p.match.id + "|" + p.player.num] = p; player = p.player.num; curKey = p.match.id + "|" + p.player.num; n++; };
   for (const f of files) {
     try { const d = JSON.parse(await f.text());
@@ -385,11 +405,11 @@ async function pickOpen(inputId, id, types, multiple) {
   }
   const inp = $(inputId); inp.multiple = multiple !== false; inp.click(); return null;
 }
-$("addPack").onclick = async () => { const fs = await pickOpen("packInput", "vc-player-packs", [{ description: "Пакет матча или файл сезона", accept: { "application/json": [".json"] } }]); if (fs && fs.length) addPacks(fs); };
+$("addPack").onclick = async () => { const fs = await pickOpen("packInput", "vc-player-packs", [{ description: "Пакет матча, файл сезона или архив", accept: { "application/json": [".json"], "application/zip": [".zip"] } }]); if (fs && fs.length) addPacks(fs); };
 $("packInput").onchange = (e) => { addPacks(Array.from(e.target.files || [])); e.target.value = ""; };
 document.body.addEventListener("dragover", (e) => e.preventDefault());
 document.body.addEventListener("drop", (e) => { const fs = Array.from(e.dataTransfer.files || []); if (!fs.length) return; e.preventDefault();
-  if (fs.every((f) => /\.json$/i.test(f.name))) addPacks(fs); else if (curKey) openVideoFiles(fs); });
+  if (fs.every((f) => /\.(json|zip)$/i.test(f.name))) addPacks(fs); else if (curKey) openVideoFiles(fs); });
 function download(name, blob) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
 $("saveAll").onclick = () => {
   const list = player ? packsOf(player).map(([, p]) => p) : []; if (!list.length) { note("Пока нечего сохранять."); return; }
@@ -517,8 +537,21 @@ function renderMatch() {
 }
 function welcome() {
   const c = card("Добро пожаловать!", "Здесь вы разбираете свою игру.");
-  const ol = el("ol"); ["Попросите у тренера файл матча или файл сезона (.json).", "Нажмите «+ Матч» вверху и выберите его.", "Откройте видео: нарезку своих эпизодов или видео всего матча."].forEach((t) => ol.appendChild(el("li", null, t)));
-  c.appendChild(ol); c.appendChild(btn("+ Добавить матч", () => $("addPack").click(), "primary")); return c;
+  const ol = el("ol"); ["Попросите у тренера файл матча или файл сезона (.json).", "Добавьте его в приложение — как это сделать из мессенджера, написано ниже.", "Откройте видео: нарезку своих эпизодов или видео всего матча."].forEach((t) => ol.appendChild(el("li", null, t)));
+  c.appendChild(ol); c.appendChild(btn("+ Добавить матч", () => $("addPack").click(), "primary")); c.appendChild(howTo()); return c;
+}
+/* Как перенести файл из Telegram / WhatsApp — подсказка под своё устройство. */
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const ANDROID = /Android/i.test(navigator.userAgent);
+const STANDALONE = (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+function howTo() {
+  const d = el("div", "howto"); d.appendChild(el("b", null, "Файл из Telegram или WhatsApp"));
+  const ol = el("ol");
+  const L = IOS ? ["В чате нажмите на файл, затем «Поделиться» (квадрат со стрелкой) → «Сохранить в Файлы» → «Сохранить».", "Здесь нажмите «+ Матч» → «Недавние» и выберите файл."]
+    : ANDROID ? (STANDALONE || "BeforeInstallPromptEvent" in window ? ["В чате нажмите на файл и удерживайте → «Поделиться» (или ⋮ → «Поделиться»).", "В списке выберите <b>VolleyCalc</b> — матч добавится сам. Если VolleyCalc в списке нет, установите приложение на главный экран (меню браузера ⋮ → «Установить приложение»).", "Или: «+ Матч» → «Загрузки» (Telegram — папка Telegram)."] : ["В чате нажмите на файл, чтобы он скачался.", "Здесь нажмите «+ Матч» → «Загрузки» и выберите файл."])
+    : ["Сохраните файл из чата на компьютер (Telegram: правой кнопкой → «Сохранить как»).", "Нажмите «+ Матч» или просто перетащите файл в это окно."];
+  L.concat(["Если тренер прислал архив .zip — его тоже можно выбрать, матчи достанутся сами."]).forEach((t) => { const li = el("li"); li.innerHTML = t; ol.appendChild(li); });
+  d.appendChild(ol); return d;
 }
 function renderMatchSimple(p, s, body, list) {
   const c0 = card(title(p), "Счёт " + score(p) + (p.match.tournament ? " · " + p.match.tournament : ""));
@@ -1102,6 +1135,7 @@ document.addEventListener("keydown", (e) => {
 function renderHelp() {
   const box = $("tab-help"); box.textContent = "";
   const add = (h, items, ol) => { const c = card(h, null, "help"); const L = el(ol ? "ol" : "ul"); items.forEach((t) => { const li = el("li"); li.innerHTML = t; L.appendChild(li); }); c.appendChild(L); box.appendChild(c); };
+  { const c0 = card("Как добавить матч из мессенджера", null, "help"); c0.appendChild(howTo()); box.appendChild(c0); }
   add("Быстрый старт", ["<b>Добавьте матч.</b> Тренер присылает файл матча (.json) или файл сезона «Мой сезон». Нажмите «+ Матч» и выберите его — можно сразу несколько.",
     "<b>Откройте видео.</b> <i>Нарезка</i> — короткий файл только с вашими эпизодами, удобно на телефоне. <i>Весь матч</i> — запись целиком (если игра записана частями, выберите все файлы сразу). Переключатель «Нарезка / Весь матч» под видео меняет одно на другое, эпизод не теряется.",
     "<b>Смотрите свои моменты.</b> Кнопки «▶ …» и подчёркнутые числа запускают эпизоды подряд."], true);
@@ -1149,6 +1183,15 @@ window.addEventListener("message", (e) => { const d = e.data; if (!SIM || !d || 
   player = d.player; curKey = d.cur ? d.cur + "|" + d.player : null; setF = "all"; pl = null; syncVideoFor(null); switchTab("match");
   if (d.files && d.files.length && curKey && store.packs[curKey]) openVideoFiles(d.files, "full"); });
 if (SIM && window.parent !== window) window.parent.postMessage({ type: "vc-sim-ready" }, "*");
+// файл, присланный через «Поделиться → VolleyCalc» (Android): service worker кладёт его в кэш и открывает эту страницу
+if (Q.has("shared") && !JUNIOR) { try { if (localStorage.getItem("vc-role") === "junior") { location.replace("player.html?v=junior&shared=1"); throw 0; } } catch (e) { if (e === 0) Q.delete("shared"); } }
+if (Q.has("shared") && "caches" in window) (async () => {
+  try { const c = await caches.open("vc-share"), keys = await c.keys(), fs = [];
+    for (const k of keys) { const r = await c.match(k); fs.push(new File([await r.blob()], decodeURIComponent(new URL(k.url).searchParams.get("n") || "file.json"))); await c.delete(k); }
+    history.replaceState(null, "", location.pathname + (JUNIOR ? "?v=junior" : ""));
+    if (fs.length) addPacks(fs); else note("Файл не получен — добавьте его кнопкой «+ Матч».");
+  } catch (e) { note("Не удалось принять файл — добавьте его кнопкой «+ Матч»."); }
+})();
 if ("serviceWorker" in navigator && location.protocol === "https:" && !SIM) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>

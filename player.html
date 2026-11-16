@@ -193,6 +193,10 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
 #matchHead label{max-width:100%;min-width:0;flex-wrap:nowrap}
 #matchSel{min-width:0;flex:1 1 auto;width:100%;text-overflow:ellipsis}
 #roleLink{align-self:center;color:var(--m)}
+.qin{margin:2px 0 6px 28px;min-height:40px}
+.qtxt{margin:0 0 4px 28px}
+.bestme{font-weight:700;margin:6px 0}
+.hwcard{border-left-color:var(--q2)}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 </style>
@@ -496,8 +500,14 @@ function renderMatch() {
   const ss = $("setSel"); ss.textContent = ""; [["all", "весь матч"]].concat(setsPlayed(p).map((s) => [String(s), "партия " + s])).forEach(([v, t]) => { const o = el("option", null, t); o.value = v; if (v === setF) o.selected = true; ss.appendChild(o); });
   syncVideoFor(p); renderSrc(); renderClip();
   const s = calc(p, setF);
+  const hw = Array.from(new Set(p.acts.filter((a) => a.hw).map((a) => a.ri)));
+  if (hw.length) { const f = fbOf(curKey), sn = hw.filter((ri) => f.seen[ri]).length;
+    const c = card("Задание от тренера", "Посмотри и разбери эти эпизоды до тренировки.", "coach hwcard");
+    const hp = el("p", null, (sn === hw.length ? "✓ Всё посмотрено: " : "Посмотрено ") + sn + " из " + hw.length); hp.id = "hwP"; c.appendChild(hp);
+    c.appendChild(btn("▶ Смотреть задание", () => playActs((a) => !!a.hw, "задание от тренера"), "primary")); body.appendChild(c); }
   if (p.note) { const c = card("Тренер о матче", null, "coach"); c.appendChild(el("p", null, p.note)); body.appendChild(c); }
   if (prefs.mode === "simple") renderMatchSimple(p, s, body, list); else renderMatchFull(p, s, body, list);
+  const fc = feedbackCard(p); fc.id = "fbCard"; body.appendChild(fc);
 }
 function welcome() {
   const c = card("Добро пожаловать!", "Здесь вы разбираете свою игру.");
@@ -517,6 +527,11 @@ function renderMatchSimple(p, s, body, list) {
   const b4 = el("div", "bigcard"); b4.append(el("span", "k", "Мои лучшие моменты"), el("span", "v", plural(top.length, "эпизод", "эпизода", "эпизодов")));
   b4.appendChild(btn("▶ Смотреть", () => playRallies(top, "мои лучшие моменты"), "primary"));
   big.append(b1, b2, b3, b4); c0.appendChild(big);
+  if (list.length > 1) {   // сравнение только с собой: лучший свой матч по очкам
+    let best = null; list.forEach(([k2, p2]) => { if (k2 === curKey) return; const v = calc(p2, "all").pts; if (!best || v > best.v) best = { v, p: p2 }; });
+    if (best) c0.appendChild(el("p", "bestme", s.pts > best.v ? "⭐ Это твой лучший матч по очкам! Прошлый рекорд — " + best.v + " (против " + best.p.match.them + ")." :
+      s.pts === best.v ? "⭐ Повторён твой рекорд по очкам — " + best.v + "!" : "Твой рекорд — " + plural(best.v, "очко", "очка", "очков") + " (против " + best.p.match.them + "). Сегодня — " + s.pts + ". До рекорда: " + (best.v - s.pts) + "."));
+  }
   c0.appendChild(btn("Картинка с итогом матча", () => shareCard(p, s)));
   body.appendChild(c0);
   // по действиям — простыми словами, сравнение с прошлым матчем
@@ -881,6 +896,33 @@ function playAt(i, keepPaused) {
   if (!vmode) return;
   if (!c) { $("clipInfo").textContent = "Этого эпизода нет в нарезке — переключитесь на «Весь матч»"; vid.pause(); pl.playing = false; return; }
   pl.end = c.e; pl.playing = true; vid.currentTime = c.s; if (!keepPaused) vid.play();
+  markSeen(pl.items[pl.i].ri);
+}
+/* Ответ тренеру: какие эпизоды посмотрены и вопросы к ним (хранится в этом браузере, отправляется файлом). */
+function fbOf(key) { store.fb = store.fb || {}; return store.fb[key] = store.fb[key] || { seen: {}, q: {} }; }
+function markSeen(ri) {
+  if (!curKey) return; const f = fbOf(curKey); if (f.seen[ri]) return; f.seen[ri] = 1; persist(); renderMatchFb();
+  const hp = $("hwP"), p = store.packs[curKey]; if (hp && p) { const hw = Array.from(new Set(p.acts.filter((a) => a.hw).map((a) => a.ri))), sn = hw.filter((x) => f.seen[x]).length; hp.textContent = (sn === hw.length ? "✓ Всё посмотрено: " : "Посмотрено ") + sn + " из " + hw.length; }
+}
+let qOpen = null;
+function renderMatchFb() { const old = $("fbCard"), p = curKey && store.packs[curKey]; if (!old || !p) return; const n = feedbackCard(p); n.id = "fbCard"; old.replaceWith(n); }
+function feedbackCard(p) {
+  const f = fbOf(curKey), rr = myRallies(p), seen = rr.filter((r) => f.seen[r.i]).length, qs = Object.keys(f.q).filter((k) => f.q[k]);
+  const c = card(JUNIOR ? "Тренеру" : "Ответ тренеру", JUNIOR ? "Посмотри свои моменты. Если что-то непонятно — нажми ❓ у эпизода и напиши вопрос." : "Отметка «посмотрел» ставится сама, когда эпизод запускается. Вопрос к эпизоду — кнопка ❓ в списке эпизодов.");
+  c.appendChild(el("p", null, "Посмотрено эпизодов: " + seen + " из " + rr.length + (qs.length ? " · вопросов: " + qs.length : "")));
+  qs.forEach((k) => { const r = p.rallies[+k]; c.appendChild(el("div", "muted", "❓ П" + r.set + " · " + r.before.join(":") + " — " + f.q[k])); });
+  const b = btn("Отправить тренеру", () => sendFeedback(p), "primary"); b.disabled = SIM; if (SIM) b.title = "В симуляторе не отправляется"; c.appendChild(b);
+  return c;
+}
+async function sendFeedback(p) {
+  const f = fbOf(curKey), rr = myRallies(Object.assign({}, p)), hw = Array.from(new Set(p.acts.filter((a) => a.hw).map((a) => a.ri)));
+  const q = Object.keys(f.q).filter((k) => f.q[k]).map((k) => { const r = p.rallies[+k], a = p.acts.find((x) => x.ri === +k); return { set: r.set, idx: r.idx, before: r.before, act: a ? resName(a.a, a.r) : "", text: f.q[k] }; });
+  const o = { app: "vc-player-feedback", v: 1, sent: new Date().toISOString(), player: { num: p.player.num, name: p.player.name || "" }, match: { id: p.match.id, date: p.match.date, them: p.match.them },
+    seen: Object.keys(f.seen).map(Number).filter((ri) => p.rallies[ri]).map((ri) => [p.rallies[ri].set, p.rallies[ri].idx]), total: rr.length, hwTotal: hw.length, hwSeen: hw.filter((ri) => f.seen[ri]).length, q };
+  const name = ("VolleyCalc_№" + p.player.num + "_ответ_" + (p.match.date || "") + "_" + (p.match.them || "матч") + ".json").replace(/[\\/:*?"<>|\s]+/g, "_");
+  const blob = new Blob([JSON.stringify(o)], { type: "application/json" });
+  try { const fl = new File([blob], name, { type: "application/json" }); if (navigator.canShare && navigator.canShare({ files: [fl] })) { await navigator.share({ files: [fl], title: "Ответ тренеру" }); return; } } catch (e) { if (e && e.name === "AbortError") return; }
+  download(name, blob); note("Файл «" + name + "» сохранён — отправьте его тренеру.");
 }
 function nextAfterEnd() {
   if (loop) return pl.i;
@@ -900,7 +942,15 @@ function renderClip() {
     const lb = btn((k + 1) + ". " + x.label + (cm ? " 💬" : ""), () => playAt(k), "lab");
     const cb = btn("сравн.", () => { const j = pl.cmp.indexOf(k); if (j >= 0) pl.cmp.splice(j, 1); else { pl.cmp.push(k); if (pl.cmp.length > 2) pl.cmp.shift(); } renderClip(); if (pl.cmp.length === 2) playAt(pl.cmp[0]); }, "cmp");
     cb.setAttribute("aria-pressed", String(pl.cmp.indexOf(k) >= 0)); cb.title = "Отметьте два эпизода — они будут идти по очереди";
-    row.append(lb, cb); ul.appendChild(row); });
+    const f = curKey ? fbOf(curKey) : { seen: {}, q: {} };
+    if (f.seen[x.ri]) lb.textContent = lb.textContent + " ✓";
+    const qb = btn(f.q[x.ri] ? "❓✎" : "❓", () => { qOpen = qOpen === x.ri ? null : x.ri; renderClip(); }, "cmp"); qb.title = "Вопрос тренеру об этом эпизоде";
+    row.append(lb, qb, cb); ul.appendChild(row);
+    if (qOpen === x.ri) { const qi = el("input"); qi.type = "text"; qi.maxLength = 300; qi.placeholder = "Вопрос тренеру (Enter — сохранить)"; qi.value = f.q[x.ri] || ""; qi.className = "qin";
+      const save = () => { const v = qi.value.trim(); if (v) f.q[x.ri] = v; else delete f.q[x.ri]; persist(); qOpen = null; renderClip(); if (prefs) renderMatchFb(); };
+      qi.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { qOpen = null; renderClip(); } }); qi.addEventListener("change", save);
+      ul.appendChild(qi); setTimeout(() => qi.focus(), 0); }
+    else if (f.q[x.ri]) ul.appendChild(el("div", "muted qtxt", "❓ " + f.q[x.ri])); });
   $("cmpInfo").textContent = pl.cmp.length === 2 ? "Сравнение: эпизоды " + (pl.cmp[0] + 1) + " и " + (pl.cmp[1] + 1) + " идут по очереди. Снимите отметку «сравн.», чтобы выйти." : pl.cmp.length === 1 ? "Отметьте ещё один эпизод для сравнения." : "";
   if (pl.items.length) { const c = vmode ? clipOf(p, pl.items[pl.i]) : null; $("clipInfo").textContent = pl.items[pl.i].label + (c ? " · " + fmt(c.ms) : ""); }
 }
@@ -931,6 +981,7 @@ function renderHelp() {
   add("Видео", ["◀ Пред. / След. ▶ — эпизоды; на телефоне — свайп по видео влево и вправо.", "0,25× и 0,5× — медленно, ⏴ ⏵ — по одному кадру (видео на паузе).", "↻ Повтор — эпизод крутится по кругу.", "«сравн.» у двух эпизодов — они идут по очереди, например хороший и неудачный приём.",
     "⛶ — во весь экран с крупными кнопками; на телефоне удобно повернуть его горизонтально.", "💬 — у эпизода есть комментарий тренера, он появляется на видео.",
     "На компьютере: пробел — пауза, ← → — эпизоды, , и . — кадр, 1 / 2 / 3 — скорость 0,25 / 0,5 / 1, L — повтор, F — весь экран, Esc — выйти."]);
+  add("Задание и вопросы тренеру", ["<b>Задание от тренера</b> — эпизоды, которые тренер просит посмотреть до тренировки. Карточка показывает, сколько уже посмотрено.", "Эпизод отмечается ✓, когда вы его запускаете.", "<b>❓</b> у эпизода — вопрос тренеру. Потом нажмите <b>«Отправить тренеру»</b> внизу разбора матча: на телефоне откроется «Поделиться», на компьютере сохранится маленький файл — отправьте его тренеру.", "Ответ тренера придёт комментарием 💬 к эпизоду со следующим файлом матча."]);
   add("Цели и сезон", ["<b>Мои цели</b> — их ставит тренер; галочка — цель выполнена в матче.", "<b>Как я меняюсь</b> — маленькие графики по каждому действию от матча к матчу.", "<b>Мои рекорды</b> — лучший матч по каждому показателю.", "<b>Картинка с итогом матча</b> — для родителей или чата команды; на телефоне откроется меню «Поделиться»."]);
   add("Что означают показатели", ["<b>Хорошие</b> — «отлично» и «норм.».", "<b>Эффективность атаки</b> = (очки − ошибки − блоки соперника) / все атаки.", "<b>Вклад на 100 касаний</b> — сколько очков ваши касания добавили команде, в расчёте на 100 касаний.",
     "<b>Над партнёрами</b> — насколько ваши касания лучше (+) или хуже (−) касаний партнёров в тех же действиях того же матча; так честно сравниваются матчи с сильными и слабыми соперниками.", "Цвета и значки качества: ✓ очко или отлично, + норм., · в игре, ! плохо, ✗ ошибка."]);

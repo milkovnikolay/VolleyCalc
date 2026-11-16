@@ -196,6 +196,9 @@ svg .vl{fill:var(--fg);font-size:11.5px;font-weight:700}
 .qin{margin:2px 0 6px 28px;min-height:40px}
 .qtxt{margin:0 0 4px 28px}
 .bestme{font-weight:700;margin:6px 0}
+.bestme.plain{font-weight:400;color:var(--muted)}
+.auto{display:inline-block;font-size:.7rem;font-weight:700;text-transform:none;letter-spacing:0;padding:1px 7px;border-radius:999px;border:1px dashed var(--muted);color:var(--muted);margin-left:6px;vertical-align:middle;white-space:nowrap}
+.autonote{font-size:.8rem;color:var(--muted);margin:6px 0 0}
 .hwcard{border-left-color:var(--q2)}
 .embfr{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:2;background:#000}
 .exp{font-size:.7rem;background:var(--q2);color:#1b1300;border-radius:999px;padding:1px 6px;margin-left:6px}
@@ -493,13 +496,18 @@ function goalsCard(list, simple) {
 }
 
 /* ---------- МАТЧ ---------- */
+/* Пороги, чтобы похвала и сравнения были только при значимых результатах. */
+const BEST_MIN = 2, REC_MIN_PTS = 3, TREND_MIN_N = 4, TREND_D = 0.1, CLEAN_MIN_N = 6, REC_MIN_CNT = 2;
+const autoTag = () => { const t = el("span", "auto", "авто"); t.title = "Подобрано приложением автоматически по разметке — это не оценка и не совет тренера"; return t; };
+const trendOf = (r, r0, n, n0) => { if (r == null || r0 == null || n < TREND_MIN_N || n0 < TREND_MIN_N) return null; const d = r - r0;
+  return el("span", "trend " + (d >= TREND_D ? "up" : d <= -TREND_D ? "down" : ""), d >= TREND_D ? "↑ лучше" : d <= -TREND_D ? "↓ хуже" : "≈ так же"); };
 function bestOf(s) {
   const C = [["S#", "эйс", "эйса", "эйсов", (a) => a.a === "S" && a.r === "#"], ["K", "очко атакой", "очка атакой", "очков атакой", (a) => /[ACF]/.test(a.a) && a.r === "#"],
     ["B#", "очко блоком", "очка блоком", "очков блоком", (a) => a.a === "B" && a.r === "#"], ["R#", "отличный приём", "отличных приёма", "отличных приёмов", (a) => a.a === "R" && a.r === "#"],
     ["D#", "отличная защита", "отличные защиты", "отличных защит", (a) => a.a === "D" && a.r === "#"], ["E#", "отличный пас", "отличных паса", "отличных пасов", (a) => a.a === "E" && a.r === "#"]];
   const w = { "S#": 3, K: 2.5, "B#": 3, "R#": 1, "D#": 1.5, "E#": 0.6 };
   let best = null; C.forEach(([k, a, b, c2, pred]) => { const n = s.acts.filter(pred).length; if (n && (!best || n * w[k] > best.score)) best = { n, txt: plural(n, a, b, c2), pred, score: n * w[k] }; });
-  return best;
+  return best && best.score >= BEST_MIN ? best : null;   // хвалим только за заметное: эйс, очко атакой или блоком, 2+ отличных приёма и т.п.
 }
 function workOf(s) {
   const C = [["подачи", (a) => a.a === "S" && a.r === "="], ["приёма", (a) => a.a === "R" && a.r === "="], ["атаки", (a) => /[AC]/.test(a.a) && (a.r === "=" || a.r === "/")],
@@ -558,30 +566,33 @@ function renderMatchSimple(p, s, body, list) {
   const c0 = card(title(p), "Счёт " + score(p) + (p.match.tournament ? " · " + p.match.tournament : ""));
   const big = el("div", "big");
   const best = bestOf(s), work = workOf(s);
-  const b1 = el("div", "bigcard good"); b1.append(el("span", "k", "Лучшее в игре"), el("span", "v", best ? best.txt : "Ты в игре!"));
+  const k1 = el("span", "k", "Лучшее в игре"); k1.appendChild(autoTag());
+  const b1 = el("div", "bigcard good"); b1.append(k1, el("span", "v", best ? best.txt : "Ярких моментов пока нет"));
   if (best) b1.appendChild(btn("▶ Посмотреть", () => playActs(best.pred, "лучшее в игре")));
-  const b2 = el("div", "bigcard work"); b2.append(el("span", "k", "Над чем поработать"), el("span", "v", work ? "ошибки " + work.nm + ": " + work.n : "Ошибок почти нет — так держать!"));
+  const k2 = el("span", "k", "Над чем поработать"); k2.appendChild(autoTag());
+  const b2 = el("div", "bigcard work"); b2.append(k2, el("span", "v", work ? "ошибки " + work.nm + ": " + work.n : s.n >= CLEAN_MIN_N ? "Без ошибок — так держать!" : "Мало касаний для выводов"));
   if (work) b2.appendChild(btn("▶ Разобрать", () => playActs(work.pred, "над чем поработать")));
   const b3 = el("div", "bigcard pts"); b3.append(el("span", "k", "Мои очки"), el("span", "v", plural(s.pts, "очко", "очка", "очков")), el("span", "muted", "касаний мяча: " + s.n));
   const rr = myRallies(p), top = rr.slice().sort((a, b) => b.share - a.share).slice(0, 10);
-  const b4 = el("div", "bigcard"); b4.append(el("span", "k", "Мои лучшие моменты"), el("span", "v", plural(top.length, "эпизод", "эпизода", "эпизодов")));
+  const k4 = el("span", "k", "Мои лучшие моменты"); k4.appendChild(autoTag()); const b4 = el("div", "bigcard"); b4.append(k4, el("span", "v", plural(top.length, "эпизод", "эпизода", "эпизодов")));
   b4.appendChild(btn("▶ Смотреть", () => playRallies(top, "мои лучшие моменты"), "primary"));
   big.append(b1, b2, b3, b4); c0.appendChild(big);
+  c0.appendChild(el("p", "autonote", "«авто» — подобрано приложением по разметке матча, это не оценка и не совет тренера. Слова тренера — в карточках «Тренер о матче», «Задание от тренера» и в целях."));
   if (list.length > 1) {   // сравнение только с собой: лучший свой матч по очкам
     let best = null; list.forEach(([k2, p2]) => { if (k2 === curKey) return; const v = calc(p2, "all").pts; if (!best || v > best.v) best = { v, p: p2 }; });
-    if (best) c0.appendChild(el("p", "bestme", s.pts > best.v ? "⭐ Это твой лучший матч по очкам! Прошлый рекорд — " + best.v + " (против " + best.p.match.them + ")." :
-      s.pts === best.v ? "⭐ Повторён твой рекорд по очкам — " + best.v + "!" : "Твой рекорд — " + plural(best.v, "очко", "очка", "очков") + " (против " + best.p.match.them + "). Сегодня — " + s.pts + ". До рекорда: " + (best.v - s.pts) + "."));
+    if (best && s.pts >= REC_MIN_PTS && s.pts > best.v) c0.appendChild(el("p", "bestme", (best.v >= REC_MIN_PTS ? "⭐ Это твой лучший матч по очкам! Прошлый рекорд — " + best.v + " (против " + best.p.match.them + ")." : "⭐ Твой лучший матч по очкам — " + plural(s.pts, "очко", "очка", "очков") + "!")));
+    else if (best && s.pts >= REC_MIN_PTS && s.pts === best.v) c0.appendChild(el("p", "bestme", "⭐ Повторён твой рекорд по очкам — " + best.v + "!"));
+    else if (best && best.v >= REC_MIN_PTS && s.pts < best.v) c0.appendChild(el("p", "bestme plain", "Твой рекорд — " + plural(best.v, "очко", "очка", "очков") + " (против " + best.p.match.them + "). Сегодня — " + s.pts + "."));
   }
   c0.appendChild(btn("Картинка с итогом матча", () => shareCard(p, s)));
   body.appendChild(c0);
   // по действиям — простыми словами, сравнение с прошлым матчем
   const pp = prevPack(curKey), ps = pp ? calc(pp, "all") : null;
-  const c1 = card("Как я сыграла(л) в каждом действии".replace("сыграла(л)", "сыграл(а)"), ps ? "Стрелка — лучше или хуже, чем в прошлом матче (" + pp.match.them + ")." : null);
+  const c1 = card("Как я сыграла(л) в каждом действии".replace("сыграла(л)", "сыграл(а)"), ps ? "Стрелка — сравнение с прошлым матчем (" + pp.match.them + "): показывается, если в обоих матчах было от " + TREND_MIN_N + " попыток, «лучше» и «хуже» — при разнице от " + Math.round(TREND_D * 100) + "%." : null);
   const lines = el("div", "lines");
   PLAIN.forEach(([k, nm, txt, rate]) => { const t = txt(s); if (!t) return;
     const ln = el("div", "line"); ln.append(el("b", null, nm), el("span", null, t));
-    const r = rate(s), r0 = ps ? rate(ps) : null;
-    if (r != null && r0 != null) { const d = r - r0; ln.appendChild(el("span", "trend " + (d > 0.04 ? "up" : d < -0.04 ? "down" : ""), d > 0.04 ? "↑ лучше" : d < -0.04 ? "↓ хуже" : "= как в прошлый раз")); }
+    const tr = ps ? trendOf(rate(s), rate(ps), s[k] || 0, ps[k] || 0) : null; if (tr) ln.appendChild(tr);
     ln.appendChild(el("span", "grow"));
     ln.appendChild(btn("▶ " + ACTS[k].many, () => playActs((a) => a.a === k || (k === "A" && a.a === "C"), "мои " + ACTS[k].many)));
     lines.appendChild(ln); });
@@ -613,7 +624,7 @@ function renderMatchFull(p, s, body, list) {
   }
   const cT = card("Мои действия по ходу матча", "По горизонтали — розыгрыши, по вертикали — действия, цвет и значок — качество. Нажмите отметку, чтобы посмотреть.");
   cT.appendChild(legend()); cT.appendChild(timeline(p, s, used.length ? order.filter((a, i) => i < 4 || s.c(a)) : order.slice(0, 4))); body.appendChild(cT);
-  const cB = card("Лучшие розыгрыши и над чем поработать", "По вкладу: сколько очков вы добавили или забрали у команды в розыгрыше.");
+  const cB = card("Лучшие розыгрыши и над чем поработать", "Подобрано автоматически по вкладу — сколько очков вы добавили или забрали у команды в розыгрыше. Это не оценка тренера."); cB.querySelector("h3").appendChild(autoTag());
   const rr = myRallies(p), best = rr.slice().sort((a, b) => b.share - a.share).slice(0, 10), work = rr.slice().sort((a, b) => a.share - b.share).slice(0, 10).filter((r) => r.share < 0);
   const row = el("div", "row");
   row.append(btn("▶ 10 лучших", () => playRallies(best, "10 лучших розыгрышей")), btn("▶ Над чем поработать", () => playRallies(work, "над чем поработать")), btn("▶ Все мои розыгрыши", () => playRallies(rr, "все мои розыгрыши")));
@@ -686,14 +697,16 @@ function renderSeason() {
     const m = el("div", "mini"), h = el("div", "h"), lastI = pts.map((x) => x.y != null).lastIndexOf(true), last = pts[lastI].y;
     let prev = null; for (let i = lastI - 1; i >= 0; i--) if (pts[i].y != null) { prev = pts[i].y; break; }
     h.append(el("span", null, nm), el("span", "v", pct(last))); m.appendChild(h);
-    if (prev != null) { const d = last - prev; m.appendChild(el("span", "trend " + (d > 0.04 ? "up" : d < -0.04 ? "down" : ""), d > 0.04 ? "↑ лучше прошлого" : d < -0.04 ? "↓ хуже прошлого" : "= как в прошлом")); }
+    let prevW = 0; for (let i = lastI - 1; i >= 0; i--) if (pts[i].y != null) { prevW = pts[i].w; break; }
+    const tr = trendOf(last, prev, pts[lastI].w, prevW); if (tr) { tr.textContent = tr.textContent.replace("лучше", "лучше прошлого").replace("хуже", "хуже прошлого").replace("так же", "как в прошлом"); m.appendChild(tr); }
     m.appendChild(spark(pts)); minis.appendChild(m); });
   c1.appendChild(minis); box.appendChild(c1);
   // рекорды
   const recs = [["Больше всего очков", (r) => r.pts, (v) => plural(v, "очко", "очка", "очков")], ["Очки атакой", (r) => r.Ak, (v) => String(v)], ["Эйсы", (r) => r.Sa, (v) => String(v)],
     ["Лучший приём (от 5 приёмов)", (r) => r.R >= 5 ? r.Rpos : null, pct], ["Очки блоком", (r) => r.B, (v) => String(v)], ["Отличная защита", (r) => r.c("D#"), (v) => String(v)]];
   const c2 = card("Мои рекорды", "Лучший матч сезона по каждому показателю."); const rg = el("div", "rec");
-  recs.forEach(([nm, f, ff]) => { let b = null; rows.forEach((r) => { const v = f(r); if (v != null && v > 0 && (!b || v > b.v)) b = { v, r }; }); if (!b) return;
+  const minV = { "Больше всего очков": REC_MIN_PTS, "Лучший приём (от 5 приёмов)": 0.5 };
+  if (rows.length >= 2) recs.forEach(([nm, f, ff]) => { let b = null; rows.forEach((r) => { const v = f(r); if (v != null && v > 0 && (!b || v > b.v)) b = { v, r }; }); if (!b || b.v < (minV[nm] != null ? minV[nm] : REC_MIN_CNT)) return;
     const d = el("div"); d.append(el("span", "muted", nm), el("b", null, ff(b.v)), el("span", "muted", b.r.date + " · " + b.r.opp)); rg.appendChild(d); });
   if (rg.children.length) { c2.appendChild(rg); box.appendChild(c2); }
   // матчи
@@ -1154,7 +1167,7 @@ function renderHelp() {
     "⛶ — во весь экран с крупными кнопками; на телефоне удобно повернуть его горизонтально.", "💬 — у эпизода есть комментарий тренера, он появляется на видео.",
     "На компьютере: пробел — пауза, ← → — эпизоды, , и . — кадр, 1 / 2 / 3 — скорость 0,25 / 0,5 / 1, L — повтор, F — весь экран, Esc — выйти."]);
   add("Задание и вопросы тренеру", ["<b>Задание от тренера</b> — эпизоды, которые тренер просит посмотреть до тренировки. Карточка показывает, сколько уже посмотрено.", "Эпизод отмечается ✓, когда вы его запускаете.", "<b>❓</b> у эпизода — вопрос тренеру. Потом нажмите <b>«Отправить тренеру»</b> внизу разбора матча: на телефоне откроется «Поделиться», на компьютере сохранится маленький файл — отправьте его тренеру.", "Ответ тренера придёт комментарием 💬 к эпизоду со следующим файлом матча."]);
-  add("Цели и сезон", ["<b>Мои цели</b> — их ставит тренер; галочка — цель выполнена в матче.", "<b>Как я меняюсь</b> — маленькие графики по каждому действию от матча к матчу.", "<b>Мои рекорды</b> — лучший матч по каждому показателю.", "<b>Картинка с итогом матча</b> — для родителей или чата команды; на телефоне откроется меню «Поделиться»."]);
+  add("Цели и сезон", ["<b>Мои цели</b> — их ставит тренер; галочка — цель выполнена в матче.", "<b>Как я меняюсь</b> — маленькие графики по каждому действию от матча к матчу.", "<b>Мои рекорды</b> — лучший матч по каждому показателю (показываются, когда матчей хотя бы два и результат заметный).", "Метка <b>«авто»</b> — подобрано приложением по разметке (лучшее в игре, над чем поработать, лучшие моменты и розыгрыши). Это не оценка и не совет тренера; слова тренера — в карточках «Тренер о матче», «Задание от тренера» и в целях.", "<b>Картинка с итогом матча</b> — для родителей или чата команды; на телефоне откроется меню «Поделиться»."]);
   add("Что означают показатели", ["<b>Хорошие</b> — «отлично» и «норм.».", "<b>Эффективность атаки</b> = (очки − ошибки − блоки соперника) / все атаки.", "<b>Вклад на 100 касаний</b> — сколько очков ваши касания добавили команде, в расчёте на 100 касаний.",
     "<b>Над партнёрами</b> — насколько ваши касания лучше (+) или хуже (−) касаний партнёров в тех же действиях того же матча; так честно сравниваются матчи с сильными и слабыми соперниками.", "Цвета и значки качества: ✓ очко или отлично, + норм., · в игре, ! плохо, ✗ ошибка."]);
   add("Где хранятся данные", ["Матчи хранятся в этом браузере. Сохраните их файлом: ⚙ Настройки → «Сохранить все мои матчи одним файлом». Этот файл можно открыть на другом устройстве.", "Видео в приложение не загружается — оно проигрывается прямо с устройства.", "В файлах только ваши данные: ваши действия, вклад, счёт и время эпизодов."]);
